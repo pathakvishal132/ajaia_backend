@@ -1,6 +1,7 @@
 """Django settings for the Collaborative Document Editor."""
 
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -89,6 +90,32 @@ if os.environ.get('DATABASE_URL'):
         ),
     }
 
+# Supabase-style config: DB_URL (JDBC or postgres URL) + DB_USERNAME + DB_PASSWORD.
+# DB_SCHEMA isolates this app's tables in its own Postgres schema (needs a session-mode
+# connection, i.e. pooler port 5432 or a direct connection; transaction mode ignores it).
+_db_url = os.environ.get('DB_URL', '')
+_db_match = re.match(r'^(?:jdbc:)?postgres(?:ql)?://([^:/?]+)(?::(\d+))?/([^?]+)', _db_url)
+if _db_match and not os.environ.get('DATABASE_URL'):
+    _host, _port, _name = _db_match.groups()
+    _options = {'sslmode': os.environ.get('DB_SSLMODE', 'require')}
+    if os.environ.get('DB_SCHEMA'):
+        _options['options'] = '-c search_path=' + os.environ['DB_SCHEMA']
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'HOST': _host,
+            'PORT': _port or '5432',
+            'NAME': _name,
+            'USER': os.environ.get('DB_USERNAME', 'postgres'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'OPTIONS': _options,
+            # Supabase's transaction pooler (6543) cannot keep persistent connections
+            # or server-side cursors.
+            'CONN_MAX_AGE': 0 if _port == '6543' else 60,
+            'DISABLE_SERVER_SIDE_CURSORS': _port == '6543',
+        }
+    }
+
 # Use SQLite for testing if no PostgreSQL available
 if os.environ.get('USE_SQLITE', 'false').lower() in ('true', '1', 'yes'):
     DATABASES = {
@@ -129,7 +156,7 @@ STORAGES = {
 
 # Behind a TLS-terminating proxy in production.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-CSRF_TRUSTED_ORIGINS = [
+CSRF_TRUSTED_ORIGINS = ['https://ajaiafrontend.vercel.app'] + [
     o for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o
 ]
 
@@ -161,10 +188,13 @@ SIMPLE_JWT = {
 }
 
 # CORS
-CORS_ALLOWED_ORIGINS = os.environ.get(
-    'CORS_ALLOWED_ORIGINS',
-    'http://localhost:4200,http://localhost:8080,http://127.0.0.1:4200'
-).split(',')
+# Deployed frontend is always allowed; extra origins can be added via env.
+CORS_ALLOWED_ORIGINS = ['https://ajaiafrontend.vercel.app'] + [
+    o.strip() for o in os.environ.get(
+        'CORS_ALLOWED_ORIGINS',
+        'http://localhost:4200,http://localhost:8080,http://127.0.0.1:4200',
+    ).split(',') if o.strip()
+]
 CORS_ALLOW_CREDENTIALS = True
 
 # File upload
